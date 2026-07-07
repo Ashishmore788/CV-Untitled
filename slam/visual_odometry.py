@@ -17,6 +17,7 @@ bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 cap = cv2.VideoCapture(0)
 
+# --- State: accumulated camera pose ---
 cur_R = np.eye(3)
 cur_t = np.zeros((3, 1))
 
@@ -26,9 +27,13 @@ traj_canvas = np.zeros((600, 600, 3), dtype=np.uint8)
 traj_scale = 50
 traj_offset = (300, 300)
 
-prev_gray = None
-prev_kp = None
-prev_des = None
+# --- Keyframe state: compare against a frame N steps back, not the immediately previous frame ---
+FRAME_SKIP = 8   # try 5-15; higher = more parallax but fewer updates
+key_kp = None
+key_des = None
+frame_count = 0
+
+MIN_INLIER_RATIO = 0.5
 
 print("Move your camera around slowly and steadily. Press ESC to quit.")
 
@@ -41,38 +46,51 @@ while True:
     kp, des = orb.detectAndCompute(gray, None)
 
     display = frame.copy()
+    frame_count += 1
 
-    if prev_des is not None and des is not None and len(kp) > 8 and len(prev_kp) > 8:
-        matches = bf.match(prev_des, des)
+    if key_des is not None and des is not None and len(kp) > 8 and len(key_kp) > 8 \
+            and frame_count % FRAME_SKIP == 0:
+
+        matches = bf.match(key_des, des)
         matches = sorted(matches, key=lambda x: x.distance)
 
         if len(matches) >= 8:
-            pts_prev = np.float32([prev_kp[m.queryIdx].pt for m in matches])
+            pts_key = np.float32([key_kp[m.queryIdx].pt for m in matches])
             pts_cur = np.float32([kp[m.trainIdx].pt for m in matches])
 
             E, mask = cv2.findEssentialMat(
-                pts_cur, pts_prev, K, method=cv2.RANSAC, prob=0.999, threshold=1.0
+                pts_cur, pts_key, K, method=cv2.RANSAC, prob=0.999, threshold=1.0
             )
 
             if E is not None and E.shape == (3, 3):
-                _, R, t, mask_pose = cv2.recoverPose(E, pts_cur, pts_prev, K)
+                _, R, t, mask_pose = cv2.recoverPose(E, pts_cur, pts_key, K)
+                inlier_count = int(mask_pose.sum()) if mask_pose is not None else 0
+                inlier_ratio = inlier_count / len(matches)
 
-                cur_t = cur_t + cur_R @ t
-                cur_R = R @ cur_R
+                cv2.putText(display, f"Inliers: {inlier_count}/{len(matches)} ({inlier_ratio:.2f})",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-                x, z = cur_t[0, 0], cur_t[2, 0]
-                trajectory.append((x, z))
+                if inlier_ratio >= MIN_INLIER_RATIO:
+                    cur_t = cur_t + cur_R @ t
+                    cur_R = R @ cur_R
 
-                px = int(traj_offset[0] + x * traj_scale)
-                py = int(traj_offset[1] + z * traj_scale)
-                if 0 <= px < 600 and 0 <= py < 600:
-                    cv2.circle(traj_canvas, (px, py), 2, (0, 255, 0), -1)
+                    x, z = cur_t[0, 0], cur_t[2, 0]
+                    trajectory.append((x, z))
 
-            display = cv2.drawKeypoints(frame, kp, None, color=(0, 255, 0))
+                    px = int(traj_offset[0] + x * traj_scale)
+                    py = int(traj_offset[1] + z * traj_scale)
+                    if 0 <= px < 600 and 0 <= py < 600:
+                        cv2.circle(traj_canvas, (px, py), 2, (0, 255, 0), -1)
+                else:
+                    cv2.putText(display, "Pose REJECTED (low inlier ratio)", (10, 90),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-    prev_gray = gray
-    prev_kp = kp
-    prev_des = des
+        key_kp, key_des = kp, des
+
+    elif key_des is None:
+        key_kp, key_des = kp, des
+
+    display = cv2.drawKeypoints(display, kp, None, color=(0, 255, 0))
 
     cv2.putText(display, f"Keypoints: {len(kp)}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
