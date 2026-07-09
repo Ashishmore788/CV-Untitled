@@ -1,4 +1,4 @@
-# CV Scene Reconstruction — Monocular Visual SLAM-Lite Pipeline
+# Monocular Visual SLAM-Lite Pipeline
 
 A lightweight, monocular (single-camera) scene-understanding pipeline built incrementally in Python and OpenCV — no stereo camera, LiDAR, or IMU required. Each module was developed and validated independently before being fused with the next, with results tested against scenarios specifically designed to catch superficially-plausible-but-wrong output, not just "it ran without crashing."
 
